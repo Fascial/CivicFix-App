@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -15,7 +15,7 @@ class _HomePageState extends State<HomePage> {
   DocumentSnapshot? _lastDocument;
   bool _isLoadingMore = false;
   bool _hasMore = true;
-  List<DocumentSnapshot> _issues = [];
+  List<Map<String, dynamic>> _allIssues = [];
 
   @override
   void initState() {
@@ -29,32 +29,56 @@ class _HomePageState extends State<HomePage> {
       _isLoadingMore = true;
     });
 
-    Query query = FirebaseFirestore.instance
+    Query issuesQuery = FirebaseFirestore.instance
         .collection('issues')
         .orderBy('createdAt', descending: true)
         .limit(_limit);
 
+    Query inProgressQuery = FirebaseFirestore.instance
+        .collection('in_progress_issues')
+        .orderBy('createdAt', descending: true)
+        .limit(_limit);
+
     if (loadMore && _lastDocument != null) {
-      query = query.startAfterDocument(_lastDocument!);
+      issuesQuery = issuesQuery.startAfterDocument(_lastDocument!);
+      inProgressQuery = inProgressQuery.startAfterDocument(_lastDocument!);
     }
 
-    final snapshot = await query.get();
-    if (snapshot.docs.isNotEmpty) {
-      setState(() {
-        if (loadMore) {
-          _issues.addAll(snapshot.docs);
-        } else {
-          _issues = snapshot.docs;
-        }
-        _lastDocument = snapshot.docs.last;
-        _hasMore = snapshot.docs.length == _limit;
-      });
-    } else {
-      setState(() {
-        _hasMore = false;
-      });
-    }
+    final issuesSnapshot = await issuesQuery.get();
+    final inProgressSnapshot = await inProgressQuery.get();
+
+    List<Map<String, dynamic>> combined = [
+      ...issuesSnapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['status'] = data['status'] ?? 'Open';
+        data['department_assigned'] = data['department_assigned'] ?? 'Unassigned';
+        return data;
+      }),
+      ...inProgressSnapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['status'] = data['status'] ?? 'In Progress';
+        data['department_assigned'] = data['department_assigned'] ?? 'Unassigned';
+        return data;
+      }),
+    ];
+
+    combined.sort((a, b) {
+      final aTime = a['createdAt'] is Timestamp
+          ? (a['createdAt'] as Timestamp).millisecondsSinceEpoch
+          : 0;
+      final bTime = b['createdAt'] is Timestamp
+          ? (b['createdAt'] as Timestamp).millisecondsSinceEpoch
+          : 0;
+      return bTime.compareTo(aTime);
+    });
+
     setState(() {
+      if (loadMore) {
+        _allIssues.addAll(combined);
+      } else {
+        _allIssues = combined;
+      }
+      _hasMore = issuesSnapshot.docs.length == _limit || inProgressSnapshot.docs.length == _limit;
       _isLoadingMore = false;
     });
   }
@@ -78,8 +102,12 @@ class _HomePageState extends State<HomePage> {
   void _openMap(double? lat, double? long) async {
     if (lat == null || long == null) return;
     final url = 'https://www.google.com/maps/search/?api=1&query=$lat,$long';
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    try {
+      await launchUrlString(url, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open the map.')),
+      );
     }
   }
 
@@ -87,11 +115,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text('CivicFix', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.black,
-        elevation: 0,
-      ),
+
       body: NotificationListener<ScrollNotification>(
         onNotification: (ScrollNotification scrollInfo) {
           if (_hasMore &&
@@ -101,22 +125,24 @@ class _HomePageState extends State<HomePage> {
           }
           return false;
         },
-        child: _issues.isEmpty
+        child: _allIssues.isEmpty
             ? const Center(
                 child: Text('No issues found.', style: TextStyle(color: Colors.white70)),
               )
             : ListView.builder(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                itemCount: _issues.length + (_hasMore ? 1 : 0),
+                itemCount: _allIssues.length + (_hasMore ? 1 : 0),
                 itemBuilder: (context, index) {
                   try {
-                    final data = _issues[index].data() as Map<String, dynamic>;
+                    final data = _allIssues[index];
                     final imageUrl = data['imageUrl']?.toString();
                     final caption = data['caption']?.toString() ?? '';
                     final createdAt = data['createdAt'];
                     final location = data['location'] is Map ? data['location'] as Map<String, dynamic> : null;
                     final lat = location?['lat'] is num ? (location?['lat'] as num).toDouble() : null;
                     final long = location?['long'] is num ? (location?['long'] as num).toDouble() : null;
+                    final status = data['status']?.toString() ?? 'Unknown';
+                    final department = data['department_assigned']?.toString() ?? 'Unassigned';
 
                     return Container(
                       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -164,14 +190,6 @@ class _HomePageState extends State<HomePage> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  caption,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
                                 const SizedBox(height: 10),
                                 Row(
                                   children: [
@@ -201,6 +219,30 @@ class _HomePageState extends State<HomePage> {
                                           ],
                                         ),
                                       ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Chip(
+                                      label: Text(
+                                        status,
+                                        style: const TextStyle(color: Colors.white),
+                                      ),
+                                      backgroundColor: status == 'Open'
+                                          ? Colors.green
+                                          : status == 'In Progress'
+                                              ? Colors.orange
+                                              : Colors.blueGrey,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Department: $department',
+                                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ],
