@@ -42,7 +42,7 @@ class _AddPostPageState extends State<AddPostPage> {
     try {
       String fileName = 'issues/${DateTime.now().millisecondsSinceEpoch}_${_imageFile!.path.split('/').last}';
       Reference ref = FirebaseStorage.instance.ref().child(fileName);
-      print('Uploading to: ' + fileName);
+      print('Uploading to: $fileName');
       UploadTask uploadTask = ref.putFile(_imageFile!);
       TaskSnapshot snapshot;
       try {
@@ -59,22 +59,22 @@ class _AddPostPageState extends State<AddPostPage> {
       String imageUrl;
       try {
         imageUrl = await snapshot.ref.getDownloadURL();
-        print('Download URL: ' + imageUrl);
+        print('Download URL: $imageUrl');
       } catch (e) {
         print('Failed to get download URL: $e');
         throw Exception('Failed to get download URL: $e');
       }
 
       Location location = Location();
-      bool _serviceEnabled = await location.serviceEnabled();
-      if (!_serviceEnabled) {
-        _serviceEnabled = await location.requestService();
-        if (!_serviceEnabled) throw Exception('Location service not enabled');
+      bool serviceEnabled = await location.serviceEnabled();
+      if (!serviceEnabled) {
+        serviceEnabled = await location.requestService();
+        if (!serviceEnabled) throw Exception('Location service not enabled');
       }
-      PermissionStatus _permissionGranted = await location.hasPermission();
-      if (_permissionGranted == PermissionStatus.denied) {
-        _permissionGranted = await location.requestPermission();
-        if (_permissionGranted != PermissionStatus.granted) throw Exception('Location permission denied');
+      PermissionStatus permissionGranted = await location.hasPermission();
+      if (permissionGranted == PermissionStatus.denied) {
+        permissionGranted = await location.requestPermission();
+        if (permissionGranted != PermissionStatus.granted) throw Exception('Location permission denied');
       }
       LocationData locationData = await location.getLocation();
 
