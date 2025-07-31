@@ -40,7 +40,6 @@ class _AddPostPageState extends State<AddPostPage> {
       _isLoading = true;
     });
     try {
-      // 1. Upload image to Firebase Storage
       String fileName = 'issues/${DateTime.now().millisecondsSinceEpoch}_${_imageFile!.path.split('/').last}';
       Reference ref = FirebaseStorage.instance.ref().child(fileName);
       print('Uploading to: ' + fileName);
@@ -66,7 +65,6 @@ class _AddPostPageState extends State<AddPostPage> {
         throw Exception('Failed to get download URL: $e');
       }
 
-      // 2. Get device location
       Location location = Location();
       bool _serviceEnabled = await location.serviceEnabled();
       if (!_serviceEnabled) {
@@ -80,11 +78,11 @@ class _AddPostPageState extends State<AddPostPage> {
       }
       LocationData locationData = await location.getLocation();
 
-      // 3. Add to Firestore
       await FirebaseFirestore.instance.collection('issues').add({
         'caption': _captionController.text.trim(),
         'imageUrl': imageUrl,
         'createdAt': FieldValue.serverTimestamp(),
+        'status': 'Unresolved', // Changed from 'Unprocessed' to 'Unresolved'
         'location': {
           'lat': locationData.latitude,
           'long': locationData.longitude,
