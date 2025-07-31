@@ -17,6 +17,19 @@ class _HomePageState extends State<HomePage> {
   bool _hasMore = true;
   List<Map<String, dynamic>> _allIssues = [];
 
+  String _selectedStatus = 'Unresolved';
+
+  String get _collectionName {
+    switch (_selectedStatus) {
+      case 'In Progress':
+        return 'in_progress_issues';
+      case 'Resolved':
+        return 'completed_issues';
+      default:
+        return 'issues';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -25,60 +38,39 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _fetchIssues({bool loadMore = false}) async {
     if (_isLoadingMore || (!_hasMore && loadMore)) return;
+
     setState(() {
       _isLoadingMore = true;
     });
 
-    Query issuesQuery = FirebaseFirestore.instance
-        .collection('issues')
-        .orderBy('createdAt', descending: true)
-        .limit(_limit);
-
-    Query inProgressQuery = FirebaseFirestore.instance
-        .collection('in_progress_issues')
+    Query query = FirebaseFirestore.instance
+        .collection(_collectionName)
         .orderBy('createdAt', descending: true)
         .limit(_limit);
 
     if (loadMore && _lastDocument != null) {
-      issuesQuery = issuesQuery.startAfterDocument(_lastDocument!);
-      inProgressQuery = inProgressQuery.startAfterDocument(_lastDocument!);
+      query = query.startAfterDocument(_lastDocument!);
     }
 
-    final issuesSnapshot = await issuesQuery.get();
-    final inProgressSnapshot = await inProgressQuery.get();
+    final snapshot = await query.get();
 
-    List<Map<String, dynamic>> combined = [
-      ...issuesSnapshot.docs.map((doc) {
-        final data = doc.data() as Map<String, dynamic>;
-        data['status'] = data['status'] ?? 'Open';
-        data['department_assigned'] = data['department_assigned'] ?? 'Unassigned';
-        return data;
-      }),
-      ...inProgressSnapshot.docs.map((doc) {
-        final data = doc.data() as Map<String, dynamic>;
-        data['status'] = data['status'] ?? 'In Progress';
-        data['department_assigned'] = data['department_assigned'] ?? 'Unassigned';
-        return data;
-      }),
-    ];
-
-    combined.sort((a, b) {
-      final aTime = a['createdAt'] is Timestamp
-          ? (a['createdAt'] as Timestamp).millisecondsSinceEpoch
-          : 0;
-      final bTime = b['createdAt'] is Timestamp
-          ? (b['createdAt'] as Timestamp).millisecondsSinceEpoch
-          : 0;
-      return bTime.compareTo(aTime);
-    });
+    final fetchedData = snapshot.docs.map((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      data['status'] = data['status'] ?? _selectedStatus;
+      data['department_assigned'] = data['department_assigned'] ?? 'Unassigned';
+      return data;
+    }).toList();
 
     setState(() {
       if (loadMore) {
-        _allIssues.addAll(combined);
+        _allIssues.addAll(fetchedData);
       } else {
-        _allIssues = combined;
+        _allIssues = fetchedData;
       }
-      _hasMore = issuesSnapshot.docs.length == _limit || inProgressSnapshot.docs.length == _limit;
+      _lastDocument = snapshot.docs.isNotEmpty
+          ? snapshot.docs.last
+          : _lastDocument;
+      _hasMore = snapshot.docs.length == _limit;
       _isLoadingMore = false;
     });
   }
@@ -87,16 +79,13 @@ class _HomePageState extends State<HomePage> {
     if (timestamp == null) return '';
     try {
       if (timestamp is Timestamp) {
-        final date = timestamp.toDate();
-        return DateFormat('MMM d, yyyy h:mm a').format(date);
+        return DateFormat('MMM d, yyyy h:mm a').format(timestamp.toDate());
       }
       if (timestamp is DateTime) {
         return DateFormat('MMM d, yyyy h:mm a').format(timestamp);
       }
-      return '';
-    } catch (_) {
-      return '';
-    }
+    } catch (_) {}
+    return '';
   }
 
   void _openMap(double? lat, double? long) async {
@@ -105,163 +94,297 @@ class _HomePageState extends State<HomePage> {
     try {
       await launchUrlString(url, mode: LaunchMode.externalApplication);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open the map.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not open the map.')));
     }
+  }
+
+  Widget _buildStatusChips() {
+    final statuses = ['Unresolved', 'In Progress', 'Resolved'];
+    return Container(
+      height: 50,
+      padding: const EdgeInsets.only(left: 12, top: 12),
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: statuses.length,
+        itemBuilder: (context, index) {
+          final status = statuses[index];
+          final isSelected = _selectedStatus == status;
+
+          return Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _selectedStatus = status;
+                  _allIssues.clear();
+                  _lastDocument = null;
+                  _hasMore = true;
+                });
+                _fetchIssues();
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? Colors.deepPurpleAccent
+                      : Colors.grey[850],
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: Colors.deepPurpleAccent.withOpacity(0.5),
+                            blurRadius: 8,
+                          ),
+                        ]
+                      : [],
+                ),
+                child: Center(
+                  child: Text(
+                    status,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.white70,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-
-      body: NotificationListener<ScrollNotification>(
-        onNotification: (ScrollNotification scrollInfo) {
-          if (_hasMore &&
-              !_isLoadingMore &&
-              scrollInfo.metrics.pixels == scrollInfo.metrics.maxScrollExtent) {
-            _fetchIssues(loadMore: true);
-          }
-          return false;
-        },
-        child: _allIssues.isEmpty
-            ? const Center(
-                child: Text('No issues found.', style: TextStyle(color: Colors.white70)),
-              )
-            : ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                itemCount: _allIssues.length + (_hasMore ? 1 : 0),
-                itemBuilder: (context, index) {
-                  try {
-                    final data = _allIssues[index];
-                    final imageUrl = data['imageUrl']?.toString();
-                    final caption = data['caption']?.toString() ?? '';
-                    final createdAt = data['createdAt'];
-                    final location = data['location'] is Map ? data['location'] as Map<String, dynamic> : null;
-                    final lat = location?['lat'] is num ? (location?['lat'] as num).toDouble() : null;
-                    final long = location?['long'] is num ? (location?['long'] as num).toDouble() : null;
-                    final status = data['status']?.toString() ?? 'Unknown';
-                    final department = data['department_assigned']?.toString() ?? 'Unassigned';
-
-                    return Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[900],
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
+      backgroundColor: const Color(0xFF121212),
+      body: Column(
+        children: [
+          _buildStatusChips(),
+          Expanded(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (scrollInfo) {
+                if (_hasMore &&
+                    !_isLoadingMore &&
+                    scrollInfo.metrics.pixels ==
+                        scrollInfo.metrics.maxScrollExtent) {
+                  _fetchIssues(loadMore: true);
+                }
+                return false;
+              },
+              child: _allIssues.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No issues found.',
+                        style: TextStyle(color: Colors.white70),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (imageUrl != null && imageUrl.isNotEmpty)
-                            ClipRRect(
-                              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                              child: Image.network(
-                                imageUrl,
-                                width: double.infinity,
-                                height: 260,
-                                fit: BoxFit.cover,
-                                loadingBuilder: (context, child, progress) {
-                                  if (progress == null) return child;
-                                  return Container(
-                                    width: double.infinity,
-                                    height: 260,
-                                    color: Colors.grey[800],
-                                    child: const Center(child: CircularProgressIndicator()),
-                                  );
-                                },
-                                errorBuilder: (context, error, stack) => Container(
-                                  width: double.infinity,
-                                  height: 260,
-                                  color: Colors.grey[800],
-                                  child: const Center(child: Icon(Icons.broken_image, color: Colors.white38, size: 48)),
-                                ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      itemCount: _allIssues.length + (_hasMore ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (index >= _allIssues.length) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        }
+
+                        final data = _allIssues[index];
+                        final imageUrl = data['imageUrl']?.toString();
+                        final caption = data['caption']?.toString() ?? '';
+                        final createdAt = data['createdAt'];
+                        final location =
+                            data['location'] as Map<String, dynamic>?;
+                        final lat = location?['lat']?.toDouble();
+                        final long = location?['long']?.toDouble();
+                        final status = data['status']?.toString() ?? 'Unknown';
+                        final department =
+                            data['department_assigned']?.toString() ??
+                            'Unassigned';
+
+                        return Container(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.4),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
                               ),
-                            ),
-                          Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 10),
-                                Row(
-                                  children: [
-                                    const Icon(Icons.access_time, color: Colors.white38, size: 18),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      _formatTimestamp(createdAt),
-                                      style: const TextStyle(color: Colors.white54, fontSize: 14),
-                                    ),
-                                    const Spacer(),
-                                    if (lat != null && long != null)
-                                      InkWell(
-                                        onTap: () => _openMap(lat, long),
-                                        child: Row(
-                                          children: [
-                                            const Icon(Icons.location_on, color: Colors.deepPurpleAccent, size: 20),
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              'View Location',
-                                              style: TextStyle(
-                                                color: Colors.deepPurpleAccent,
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w500,
-                                                decoration: TextDecoration.underline,
+                            ],
+                            border: Border.all(color: Colors.grey[850]!),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (imageUrl != null && imageUrl.isNotEmpty)
+                                ClipRRect(
+                                  borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(20),
+                                  ),
+                                  child: AspectRatio(
+                                    aspectRatio: 1,
+                                    child: Image.network(
+                                      imageUrl,
+                                      fit: BoxFit.cover,
+                                      loadingBuilder:
+                                          (context, child, progress) {
+                                            if (progress == null) return child;
+                                            return Container(
+                                              color: Colors.grey[900],
+                                              child: const Center(
+                                                child:
+                                                    CircularProgressIndicator(),
                                               ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                  ],
+                                            );
+                                          },
+                                      errorBuilder:
+                                          (context, error, stackTrace) =>
+                                              Container(
+                                                color: Colors.grey[900],
+                                                child: const Center(
+                                                  child: Icon(
+                                                    Icons.broken_image,
+                                                    color: Colors.white38,
+                                                    size: 48,
+                                                  ),
+                                                ),
+                                              ),
+                                    ),
+                                  ),
                                 ),
-                                const SizedBox(height: 8),
-                                Row(
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  12,
+                                  16,
+                                  8,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Chip(
-                                      label: Text(
-                                        status,
-                                        style: const TextStyle(color: Colors.white),
-                                      ),
-                                      backgroundColor: status == 'Open'
-                                          ? Colors.green
-                                          : status == 'In Progress'
+                                    Row(
+                                      children: [
+                                        Text(
+                                          _formatTimestamp(createdAt),
+                                          style: const TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        Chip(
+                                          label: Text(
+                                            status,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                          backgroundColor: status == 'Open'
+                                              ? Colors.green
+                                              : status == 'In Progress'
                                               ? Colors.orange
                                               : Colors.blueGrey,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                          ),
+                                          visualDensity: VisualDensity.compact,
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        'Department: $department',
-                                        style: const TextStyle(color: Colors.white70, fontSize: 14),
-                                        overflow: TextOverflow.ellipsis,
+                                    const SizedBox(height: 6),
+                                    if (caption.isNotEmpty)
+                                      Text(
+                                        caption,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14.5,
+                                          height: 1.4,
+                                        ),
                                       ),
+                                    const SizedBox(height: 10),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.apartment,
+                                          size: 16,
+                                          color: Colors.deepPurpleAccent,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            department,
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 13,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (lat != null && long != null)
+                                          GestureDetector(
+                                            onTap: () => _openMap(lat, long),
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 4,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.deepPurpleAccent
+                                                    .withOpacity(0.15),
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                              ),
+                                              child: const Row(
+                                                children: [
+                                                  Icon(
+                                                    Icons.location_pin,
+                                                    color:
+                                                        Colors.deepPurpleAccent,
+                                                    size: 16,
+                                                  ),
+                                                  SizedBox(width: 4),
+                                                  Text(
+                                                    'Location',
+                                                    style: TextStyle(
+                                                      color: Colors
+                                                          .deepPurpleAccent,
+                                                      fontSize: 12.5,
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ],
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    );
-                  } catch (e, stack) {
-                    print('Error building issue card: $e');
-                    print(stack);
-                    return Container(
-                      margin: const EdgeInsets.all(16),
-                      color: Colors.red,
-                      child: Text('Error displaying issue', style: TextStyle(color: Colors.white)),
-                    );
-                  }
-                },
-              ),
+                        );
+                      },
+                    ),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -13,7 +12,6 @@ class AddPostPage extends StatefulWidget {
   State<AddPostPage> createState() => _AddPostPageState();
 }
 
-
 class _AddPostPageState extends State<AddPostPage> {
   File? _imageFile;
   final TextEditingController _captionController = TextEditingController();
@@ -21,7 +19,10 @@ class _AddPostPageState extends State<AddPostPage> {
   bool _isLoading = false;
 
   Future<void> _pickImage() async {
-    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.camera);
+    final pickedFile = await _picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 75,
+    );
     if (pickedFile != null) {
       setState(() {
         _imageFile = File(pickedFile.path);
@@ -32,57 +33,45 @@ class _AddPostPageState extends State<AddPostPage> {
   Future<void> _postIssue() async {
     if (_imageFile == null || _captionController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please take a photo and enter a caption.')),
+        const SnackBar(
+          content: Text('Please take a photo and enter a caption.'),
+        ),
       );
       return;
     }
+
     setState(() {
       _isLoading = true;
     });
-    try {
-      String fileName = 'issues/${DateTime.now().millisecondsSinceEpoch}_${_imageFile!.path.split('/').last}';
-      Reference ref = FirebaseStorage.instance.ref().child(fileName);
-      print('Uploading to: $fileName');
-      UploadTask uploadTask = ref.putFile(_imageFile!);
-      TaskSnapshot snapshot;
-      try {
-        snapshot = await uploadTask;
-        print('Upload complete.');
-      } catch (e) {
-        print('Upload failed: $e');
-        throw Exception('Image upload failed: $e');
-      }
-      if (snapshot.state != TaskState.success) {
-        print('Upload not successful. State: \\${snapshot.state}');
-        throw Exception('Image upload was not successful.');
-      }
-      String imageUrl;
-      try {
-        imageUrl = await snapshot.ref.getDownloadURL();
-        print('Download URL: $imageUrl');
-      } catch (e) {
-        print('Failed to get download URL: $e');
-        throw Exception('Failed to get download URL: $e');
-      }
 
-      Location location = Location();
+    try {
+      final location = Location();
       bool serviceEnabled = await location.serviceEnabled();
-      if (!serviceEnabled) {
-        serviceEnabled = await location.requestService();
-        if (!serviceEnabled) throw Exception('Location service not enabled');
-      }
+      if (!serviceEnabled) serviceEnabled = await location.requestService();
+      if (!serviceEnabled) throw Exception('Location service not enabled');
+
       PermissionStatus permissionGranted = await location.hasPermission();
       if (permissionGranted == PermissionStatus.denied) {
         permissionGranted = await location.requestPermission();
-        if (permissionGranted != PermissionStatus.granted) throw Exception('Location permission denied');
+        if (permissionGranted != PermissionStatus.granted)
+          throw Exception('Location permission denied');
       }
-      LocationData locationData = await location.getLocation();
 
-      await FirebaseFirestore.instance.collection('issues').add({
+      final locationData = await location.getLocation();
+      final fileName =
+          'issues/${DateTime.now().millisecondsSinceEpoch}_${_imageFile!.path.split('/').last}';
+      final ref = FirebaseStorage.instance.ref().child(fileName);
+      final uploadTask = ref.putFile(_imageFile!);
+      final docRef = FirebaseFirestore.instance.collection('issues').doc();
+
+      final snapshot = await uploadTask;
+      final imageUrl = await snapshot.ref.getDownloadURL();
+
+      await docRef.set({
         'caption': _captionController.text.trim(),
         'imageUrl': imageUrl,
         'createdAt': FieldValue.serverTimestamp(),
-        'status': 'Unresolved', // Changed from 'Unprocessed' to 'Unresolved'
+        'status': 'Unresolved',
         'location': {
           'lat': locationData.latitude,
           'long': locationData.longitude,
@@ -92,16 +81,15 @@ class _AddPostPageState extends State<AddPostPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Issue posted successfully!')),
       );
+
       setState(() {
         _imageFile = null;
         _captionController.clear();
       });
-    } catch (e, stack) {
-      print('Error in _postIssue: $e');
-      print(stack);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to post: $e')),
-      );
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to post: $e')));
     } finally {
       setState(() {
         _isLoading = false;
@@ -109,87 +97,146 @@ class _AddPostPageState extends State<AddPostPage> {
     }
   }
 
+  Widget _buildLoadingOverlay() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: !_isLoading,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 300),
+          opacity: _isLoading ? 1 : 0,
+          child: Container(
+            color: Colors.black.withOpacity(0.75),
+            child: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(color: Colors.deepPurpleAccent),
+                  SizedBox(height: 20),
+                  Text(
+                    'Uploading...',
+                    style: TextStyle(color: Colors.white70, fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          GestureDetector(
-            onTap: _pickImage,
-            child: Container(
-              width: double.infinity,
-              height: 220,
-              decoration: BoxDecoration(
-                color: Colors.grey[900],
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey[700]!),
-                image: _imageFile != null
-                    ? DecorationImage(image: FileImage(_imageFile!), fit: BoxFit.cover)
-                    : null,
+    return Stack(
+      children: [
+        Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 500,
+                maxHeight: MediaQuery.of(context).size.height,
               ),
-              child: _imageFile == null
-                  ? Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: const [
-                        Icon(Icons.camera_alt_outlined, color: Colors.white54, size: 48),
-                        SizedBox(height: 12),
-                        Text(
-                          'Tap to take a photo',
-                          style: TextStyle(color: Colors.white54, fontSize: 16),
-                        ),
-                      ],
-                    )
-                  : null,
-            ),
-          ),
-          const SizedBox(height: 28),
-          TextField(
-            controller: _captionController,
-            maxLines: 2,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: 'Write a caption...',
-              hintStyle: const TextStyle(color: Colors.white54),
-              filled: true,
-              fillColor: Colors.grey[900],
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey[700]!),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey[700]!),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.deepPurpleAccent, width: 2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          _isLoading
-              ? const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: CircularProgressIndicator(),
-                )
-              : ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.deepPurpleAccent,
-                    minimumSize: const Size(double.infinity, 48),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  GestureDetector(
+                    onTap: _pickImage,
+                    child: Container(
+                      width: double.infinity,
+                      height: 300,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[900],
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.grey[700]!),
+                        image: _imageFile != null
+                            ? DecorationImage(
+                                image: FileImage(_imageFile!),
+                                fit: BoxFit.cover,
+                              )
+                            : null,
+                      ),
+                      child: _imageFile == null
+                          ? Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                Icon(
+                                  Icons.camera_alt_outlined,
+                                  color: Colors.white54,
+                                  size: 48,
+                                ),
+                                SizedBox(height: 12),
+                                Text(
+                                  'Tap to take a photo',
+                                  style: TextStyle(
+                                    color: Colors.white54,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : null,
                     ),
                   ),
-                  onPressed: _postIssue,
-                  child: const Text(
-                    'Post',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  const SizedBox(height: 28),
+                  TextField(
+                    controller: _captionController,
+                    maxLength: 150,
+                    maxLines: 3,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Write a caption...',
+                      hintStyle: const TextStyle(color: Colors.white54),
+                      filled: true,
+                      fillColor: Colors.grey[900],
+                      counterStyle: const TextStyle(color: Colors.white24),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: Colors.grey[700]!),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: Colors.grey[700]!),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: Colors.deepPurpleAccent,
+                          width: 2,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-        ],
-      ),
+                  const SizedBox(height: 24),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepPurpleAccent,
+                      minimumSize: const Size(double.infinity, 50),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: _isLoading ? null : _postIssue,
+                    icon: const Icon(
+                      Icons.cloud_upload_outlined,
+                      color: Colors.white,
+                    ),
+                    label: const Text(
+                      'Post Issue',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        _buildLoadingOverlay(),
+      ],
     );
   }
 }
