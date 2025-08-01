@@ -161,6 +161,10 @@ class _HomePageState extends State<HomePage> {
                     final status = data['status']?.toString() ?? 'Unknown';
                     final department =
                         data['department_assigned']?.toString() ?? 'Unassigned';
+                    final category =
+                        data['category']?.toString().trim().isNotEmpty == true
+                        ? data['category'].toString()
+                        : 'Uncategorized';
 
                     return Container(
                       margin: const EdgeInsets.symmetric(
@@ -278,6 +282,25 @@ class _HomePageState extends State<HomePage> {
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.category,
+                                      size: 16,
+                                      color: Colors.amber,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      category,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    const Spacer(),
                                     if (lat != null && long != null)
                                       GestureDetector(
                                         onTap: () => _openMap(lat, long),
